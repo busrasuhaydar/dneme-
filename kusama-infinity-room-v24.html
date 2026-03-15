@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>∞ Kusama Infinity Room v24</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:sans-serif;touch-action:none}
+canvas{display:block;position:fixed;top:0;left:0;width:100vw;height:100vh;cursor:grab}
+canvas:active{cursor:grabbing}
+#title{position:fixed;top:14px;left:50%;transform:translateX(-50%);
+  color:rgba(255,255,255,.18);font-size:10px;letter-spacing:4px;text-transform:uppercase;
+  white-space:nowrap;pointer-events:none;z-index:10}
+#hint{position:fixed;bottom:12px;left:50%;transform:translateX(-50%);
+  color:rgba(255,255,255,.2);font-size:10px;letter-spacing:1px;text-transform:uppercase;
+  text-align:center;pointer-events:none;z-index:10}
+/* Mobil kontrol butonları */
+#dpad{
+  display:none;
+  position:fixed;bottom:28px;right:20px;
+  width:132px;height:132px;z-index:20;
+  pointer-events:none;
+}
+#dpad button{
+  position:absolute;
+  width:40px;height:40px;
+  background:rgba(255,255,255,0.15);
+  border:1px solid rgba(255,255,255,0.3);
+  border-radius:8px;
+  color:rgba(255,255,255,0.8);
+  font-size:18px;line-height:1;
+  cursor:pointer;pointer-events:all;
+  -webkit-tap-highlight-color:transparent;
+  user-select:none;
+}
+#dpad button:active{background:rgba(255,255,255,0.35);}
+#btn-up   {left:46px;top:0}
+#btn-down {left:46px;bottom:0}
+#btn-left {left:0;  top:46px}
+#btn-right{right:0; top:46px}
+@media(max-width:900px),(pointer:coarse){
+  #dpad{display:block;}
+  #hint{display:none;}
+}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="title">∞ &nbsp; Yayoi Kusama — Infinity Mirrored Room &nbsp; ∞</div>
+<div id="hint">Sürükle = bak &nbsp;·&nbsp; WASD / Ok = yürü &nbsp;·&nbsp; Scroll = zoom</div>
+<div id="dpad">
+  <button id="btn-up">▲</button>
+  <button id="btn-left">◀</button>
+  <button id="btn-right">▶</button>
+  <button id="btn-down">▼</button>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function(){
+'use strict';
+
+var IMGS=['https://cdn.jsdelivr.net/gh/busrasuhaydar/dneme-/assets/kkkkkku%CC%88re.jpg'];
+var ROOM=40, SP=3.8, SR=0.88, COLS=8, ROWS=6, MOVE_SPEED=8;
+
+var renderer, scene, camera, loader;
+var imgIdx=0, curTex=null;
+var cubeRT, cubeCamera;
+var roomMesh=null, sphereItems=[], panelMeshes=[], ledDots=[], sphereGeo=null;
+var camPos=new THREE.Vector3(0,0,0);
+var yaw=0, pitch=0, targetYaw=0, targetPitch=0;
+var isDrag=false, lastMX=0, lastMY=0;
+var keys={ArrowUp:0,ArrowDown:0,ArrowLeft:0,ArrowRight:0,w:0,s:0,a:0,d:0};
+var isRec=false, recF=[], recStart=0, recTimer=null;
+var isPlay=false, playT=0, lastTime=0;
+
+var LED_CFGS=[
+  {c:0xff4400,r:11,ph:0.00,sp:0.28,vy:0.32},
+  {c:0xffcc00,r:14,ph:1.05,sp:0.19,vy:0.21},
+  {c:0xff0088,r:9, ph:2.09,sp:0.35,vy:0.38},
+  {c:0xaa00ff,r:12,ph:3.14,sp:0.24,vy:0.27},
+  {c:0x00aaff,r:8, ph:4.19,sp:0.31,vy:0.34},
+  {c:0xff6600,r:15,ph:5.24,sp:0.26,vy:0.29},
+  {c:0x00ff88,r:10,ph:0.70,sp:0.40,vy:0.36},
+  {c:0xff00cc,r:13,ph:3.80,sp:0.33,vy:0.23},
+];
+var ledLights=[];
+
+// ── INIT ──────────────────────────────────────────────────────
+function init(){
+  renderer = new THREE.WebGLRenderer({
+    canvas: document.getElementById('c'),
+    antialias: true,
+    powerPreference: 'high-performance'
+  });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.outputEncoding = THREE.sRGBEncoding;
+
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x000000);
+  scene.fog = new THREE.FogExp2(0x000000, 0.009); // çok az sis
+
+  camera = new THREE.PerspectiveCamera(90, window.innerWidth/window.innerHeight, 0.05, 400);
+
+  loader = new THREE.TextureLoader();
+  loader.crossOrigin = 'anonymous';
+
+  // CubeRT — 1024px kristal net yansıma
+  cubeRT = new THREE.WebGLCubeRenderTarget(1024, {
+    format: THREE.RGBFormat,
+    generateMipmaps: true,
+    minFilter: THREE.LinearMipmapLinearFilter,
+    encoding: THREE.sRGBEncoding
+  });
+  cubeCamera = new THREE.CubeCamera(0.1, 400, cubeRT);
+  scene.add(cubeCamera);
+
+  // Güçlü ambient — görsel her koşulda net
+  scene.add(new THREE.AmbientLight(0xffffff, 2.5));
+
+  // LED ışıklar
+  LED_CFGS.forEach(function(cfg){
+    var l=new THREE.PointLight(cfg.c, 3.0, 60);
+    l._cfg=cfg; scene.add(l); ledLights.push(l);
+  });
+
+  // Yüksek poly küre — dönerken pürüzsüz
+  sphereGeo = new THREE.SphereGeometry(SR, 64, 40);
+
+  setupControls();
+  window.addEventListener('resize', function(){
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    camera.aspect = window.innerWidth/window.innerHeight;
+    camera.updateProjectionMatrix();
+  });
+
+  loadImg(imgIdx);
+  lastTime = performance.now();
+  animate();
+}
+
+// ── SAHNE ─────────────────────────────────────────────────────
+function buildScene(tex){
+  sphereItems.forEach(function(s){scene.remove(s.mesh);s.mesh.material.dispose();});
+  panelMeshes.forEach(function(m){scene.remove(m);m.material.dispose();m.geometry.dispose();});
+  ledDots.forEach(function(m){scene.remove(m);m.material.dispose();});
+  sphereItems=[];panelMeshes=[];ledDots=[];
+
+  if(roomMesh){scene.remove(roomMesh);roomMesh.geometry.dispose();roomMesh.material.forEach(function(m){m.dispose();});roomMesh=null;}
+  curTex=tex;
+
+  // Duvarlar
+  var wallMat=new THREE.MeshStandardMaterial({
+    map:tex, envMap:cubeRT.texture, envMapIntensity:1.4,
+    roughness:0.05, metalness:0.9, side:THREE.BackSide, color:new THREE.Color(1,1,1)
+  });
+  roomMesh=new THREE.Mesh(new THREE.BoxGeometry(ROOM,ROOM,ROOM),[wallMat,wallMat,wallMat,wallMat,wallMat,wallMat]);
+  scene.add(roomMesh);
+
+  // Küreler — görsel net + hafif metalik parlaklık
+  // generateMipmaps:false → dönerken kare/blur yok
+  // roughness:0.2 metalness:0.3 → görsel baskın, hafif parlaklık
+  var texS=tex.clone();
+  texS.needsUpdate=true; texS.encoding=THREE.sRGBEncoding;
+  texS.minFilter=THREE.LinearFilter; texS.magFilter=THREE.LinearFilter;
+  texS.generateMipmaps=false;
+  texS.anisotropy=renderer.capabilities.getMaxAnisotropy();
+  var sphereMat=new THREE.MeshStandardMaterial({
+    map:texS, envMap:cubeRT.texture, envMapIntensity:0.5,
+    roughness:0.2, metalness:0.3, color:new THREE.Color(1,1,1)
+  });
+
+  buildPositions().forEach(function(p){
+    var mesh=new THREE.Mesh(sphereGeo,sphereMat);
+    mesh.position.set(p.x,p.y,p.z);
+    mesh.scale.setScalar(p.sc);
+    scene.add(mesh);
+    sphereItems.push({mesh:mesh,baseY:p.y,phase:Math.random()*Math.PI*2,speed:0.15+Math.random()*0.2,ry:(Math.random()-0.5)*0.007,rx:(Math.random()-0.5)*0.003});
+  });
+
+  // LED nokta küreleri
+  var ledGeo=new THREE.SphereGeometry(0.22,8,6);
+  ledLights.forEach(function(light){
+    var mat=new THREE.MeshBasicMaterial({color:light._cfg.c});
+    var mesh=new THREE.Mesh(ledGeo,mat);
+    mesh._light=light; scene.add(mesh); ledDots.push(mesh);
+  });
+
+  // Paneller — görsel net, integer repeat, hafif ayna katmanı
+  var W=SP*COLS, H=SP*ROWS, D=SP*20;
+  var repW=COLS, repH=ROWS, repD=Math.round(D/SP);
+
+  function addPanel(geo,px,py,pz,ry,rx,rU,rV){
+    var t2=tex.clone(); t2.needsUpdate=true; t2.encoding=THREE.sRGBEncoding;
+    t2.wrapS=t2.wrapT=THREE.RepeatWrapping;
+    t2.minFilter=THREE.LinearFilter; t2.magFilter=THREE.LinearFilter;
+    t2.generateMipmaps=false; t2.anisotropy=renderer.capabilities.getMaxAnisotropy();
+    t2.repeat.set(rU,rV);
+    var mi=new THREE.Mesh(geo,new THREE.MeshBasicMaterial({map:t2,side:THREE.DoubleSide,transparent:true,opacity:0.80,depthWrite:false}));
+    mi.position.set(px,py,pz); if(ry)mi.rotation.y=ry; if(rx)mi.rotation.x=rx; mi.renderOrder=1;
+    scene.add(mi); panelMeshes.push(mi);
+    var me=new THREE.Mesh(geo,new THREE.MeshStandardMaterial({envMap:cubeRT.texture,envMapIntensity:1.0,roughness:0.0,metalness:1.0,side:THREE.DoubleSide,transparent:true,opacity:0.48,depthWrite:false,color:new THREE.Color(0.92,0.88,0.92)}));
+    me.position.set(px,py,pz); if(ry)me.rotation.y=ry; if(rx)me.rotation.x=rx; me.renderOrder=2;
+    scene.add(me); panelMeshes.push(me);
+  }
+
+  for(var iz=0;iz<10;iz++) addPanel(new THREE.PlaneGeometry(W,H),0,0,-(iz*SP*2)+SP*2,0,0,repW,repH);
+  for(var ix=0;ix<=COLS;ix++) addPanel(new THREE.PlaneGeometry(D,H),(ix-COLS/2)*SP,0,-D*0.35,Math.PI/2,0,repD,repH);
+  for(var iy=0;iy<=ROWS;iy++) addPanel(new THREE.PlaneGeometry(W,D),0,(iy-ROWS/2)*SP,-D*0.35,0,Math.PI/2,repW,repD);
+}
+
+function buildPositions(){
+  var pts=[],D=10;
+  for(var iz=0;iz<D;iz++){var z=-(iz*SP)+SP*1.5,sc=Math.pow(0.96,iz),br=Math.max(1-iz*0.07,0.35);for(var iy=0;iy<ROWS;iy++)for(var ix=0;ix<COLS;ix++)pts.push({x:(ix-(COLS-1)/2)*SP,y:(iy-(ROWS-1)/2)*SP,z:z,sc:sc,br:br});}
+  for(var iz2=1;iz2<D;iz2++){var z2=iz2*SP+SP,sc2=Math.pow(0.96,iz2),br2=Math.max(1-iz2*0.07,0.35);for(var iy2=0;iy2<ROWS;iy2++)for(var ix2=0;ix2<COLS;ix2++)pts.push({x:(ix2-(COLS-1)/2)*SP,y:(iy2-(ROWS-1)/2)*SP,z:z2,sc:sc2,br:br2});}
+  for(var xd=0;xd<7;xd++){var xb=Math.max(1-xd*0.09,0.3),xs=Math.pow(0.95,xd);for(var sg=-1;sg<=1;sg+=2)for(var ya=0;ya<ROWS;ya++)for(var za=0;za<8;za++)pts.push({x:sg*(xd+1)*SP,y:(ya-(ROWS-1)/2)*SP,z:(za-3.5)*SP,sc:xs,br:xb});}
+  for(var yd=0;yd<5;yd++){var yb=Math.max(1-yd*0.09,0.3),ys=Math.pow(0.95,yd);for(var sg2=-1;sg2<=1;sg2+=2)for(var xa=0;xa<COLS;xa++)for(var za2=0;za2<8;za2++)pts.push({x:(xa-(COLS-1)/2)*SP,y:sg2*(yd+1)*SP,z:(za2-3.5)*SP,sc:ys,br:yb});}
+  return pts;
+}
+
+function makeFallback(){
+  var sz=256,fc=document.createElement('canvas');fc.width=fc.height=sz;var x=fc.getContext('2d');x.fillStyle='#c06000';x.fillRect(0,0,sz,sz);var g=x.createRadialGradient(sz/2,sz/2,0,sz/2,sz/2,sz*.65);g.addColorStop(0,'rgba(255,170,0,.6)');g.addColorStop(1,'rgba(0,0,0,0)');x.fillStyle=g;x.fillRect(0,0,sz,sz);x.strokeStyle='#180400';x.lineWidth=8;for(var i=0;i<=7;i++){var px=i*sz/7;x.beginPath();x.moveTo(px,0);x.bezierCurveTo(px+10,sz/3,px-10,sz*2/3,px,sz);x.stroke();}var dd=[[50,50,18],[148,38,14],[252,60,20],[358,42,13],[458,54,17],[26,144,12],[108,160,19],[220,130,15],[332,148,18],[440,134,11]];x.fillStyle='#100200';dd.forEach(function(d){x.beginPath();x.arc(d[0],d[1],d[2],0,Math.PI*2);x.fill();});var t=new THREE.CanvasTexture(fc);t.encoding=THREE.sRGBEncoding;return t;
+}
+
+function loadImg(idx){
+  loader.load(IMGS[idx],function(tex){
+    tex.encoding=THREE.sRGBEncoding;
+    tex.minFilter=THREE.LinearFilter; tex.magFilter=THREE.LinearFilter;
+    tex.generateMipmaps=false;
+    tex.anisotropy=renderer.capabilities.getMaxAnisotropy();
+    buildScene(tex);
+  },undefined,function(){buildScene(makeFallback());});
+}
+
+// ── ANİMATE ───────────────────────────────────────────────────
+var frameCount = 0;
+function animate(){
+  requestAnimationFrame(animate);
+  var now = performance.now();
+  var dt  = Math.min((now-lastTime)/1000, 0.05);
+  lastTime = now;
+  var t = now/1000;
+  frameCount++;
+
+
+  if(!isPlay){
+    var cy=Math.cos(yaw), sy=Math.sin(yaw);
+    var cp=Math.cos(pitch), sp2=Math.sin(pitch);
+    var fwd   = new THREE.Vector3(-sy*cp, sp2, -cy*cp);
+    var right = new THREE.Vector3(cy, 0, -sy);
+    var spd   = MOVE_SPEED * dt;
+    if(keys.ArrowUp   ||keys.w) camPos.addScaledVector(fwd,   spd);
+    if(keys.ArrowDown ||keys.s) camPos.addScaledVector(fwd,  -spd);
+    if(keys.ArrowLeft ||keys.a) camPos.addScaledVector(right, -spd);
+    if(keys.ArrowRight||keys.d) camPos.addScaledVector(right,  spd);
+    var lim = ROOM/2-1.5;
+    camPos.clamp(new THREE.Vector3(-lim,-lim,-lim), new THREE.Vector3(lim,lim,lim));
+  }
+
+  yaw   += (targetYaw  -yaw  ) * 0.1;
+  pitch += (targetPitch-pitch) * 0.1;
+  pitch = Math.max(-Math.PI*0.48, Math.min(Math.PI*0.48, pitch));
+
+  camera.position.copy(camPos);
+  camera.rotation.order = 'YXZ';
+  camera.rotation.y = yaw;
+  camera.rotation.x = pitch;
+
+  // LED ışıklar + nokta küreleri
+  ledLights.forEach(function(l){
+    var c=l._cfg, a=t*c.sp+c.ph;
+    l.position.set(Math.cos(a)*c.r, Math.sin(t*c.vy+c.ph)*6, Math.sin(a)*c.r-8);
+    l.intensity=2.8+Math.sin(t*2.2+c.ph)*0.8;
+  });
+  ledDots.forEach(function(m){if(m._light)m.position.copy(m._light.position);});
+
+  // Küre animasyonu
+  for(var i=0; i<sphereItems.length; i++){
+    var s = sphereItems[i];
+    s.mesh.position.y = s.baseY + Math.sin(t*s.speed+s.phase)*0.08;
+    s.mesh.rotation.y += s.ry;
+    s.mesh.rotation.x += s.rx;
+  }
+
+  // CubeCamera — her 8 framede bir (1024px için yeterli hız)
+  if(frameCount % 8 === 0 && roomMesh){
+    cubeCamera.position.copy(camPos);
+    roomMesh.visible=false;
+    panelMeshes.forEach(function(p){p.visible=false;});
+    ledDots.forEach(function(m){m.visible=false;});
+    cubeCamera.update(renderer, scene);
+    roomMesh.visible=true;
+    panelMeshes.forEach(function(p){p.visible=true;});
+    ledDots.forEach(function(m){m.visible=true;});
+  }
+
+  renderer.render(scene, camera);
+}
+
+// ── KONTROLLER ────────────────────────────────────────────────
+function setupControls(){
+  var cv = renderer.domElement;
+  cv.style.cursor = 'grab';
+  cv.addEventListener('mousedown', function(e){
+    isDrag=true; lastMX=e.clientX; lastMY=e.clientY; cv.style.cursor='grabbing';
+  });
+  window.addEventListener('mouseup', function(){ isDrag=false; cv.style.cursor='grab'; });
+  window.addEventListener('mousemove', function(e){
+    if(!isDrag||isPlay) return;
+    targetYaw   -= (e.clientX-lastMX)*0.004;
+    targetPitch -= (e.clientY-lastMY)*0.003;
+    lastMX=e.clientX; lastMY=e.clientY;
+  });
+  window.addEventListener('wheel', function(e){
+    e.preventDefault();
+    var cy=Math.cos(yaw),sy=Math.sin(yaw),cp=Math.cos(pitch),sp2=Math.sin(pitch);
+    var fwd=new THREE.Vector3(-sy*cp,sp2,-cy*cp);
+    camPos.addScaledVector(fwd,-e.deltaY*0.018);
+    var lim=ROOM/2-1.5;
+    camPos.clamp(new THREE.Vector3(-lim,-lim,-lim),new THREE.Vector3(lim,lim,lim));
+  },{passive:false});
+  window.addEventListener('keydown', function(e){
+    if(e.key in keys){ keys[e.key]=1; e.preventDefault(); }
+  });
+  window.addEventListener('keyup', function(e){ if(e.key in keys) keys[e.key]=0; });
+  // Touch
+  var ltx=0,lty=0,ltd=0;
+  cv.addEventListener('touchstart',function(e){
+    e.preventDefault();
+    if(e.touches.length===1){ltx=e.touches[0].clientX;lty=e.touches[0].clientY;}
+    if(e.touches.length===2) ltd=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
+  },{passive:false});
+  cv.addEventListener('touchmove',function(e){
+    e.preventDefault();
+    if(e.touches.length===1){
+      targetYaw  -=(e.touches[0].clientX-ltx)*0.004;
+      targetPitch-=(e.touches[0].clientY-lty)*0.003;
+      ltx=e.touches[0].clientX; lty=e.touches[0].clientY;
+    }
+    if(e.touches.length===2){
+      var d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
+      var cy=Math.cos(yaw),sy=Math.sin(yaw),cp=Math.cos(pitch),sp2=Math.sin(pitch);
+      camPos.addScaledVector(new THREE.Vector3(-sy*cp,sp2,-cy*cp),(d-ltd)*0.05);
+      ltd=d;
+    }
+  },{passive:false});
+
+  // Mobil D-Pad butonları
+  function bindBtn(id, key){
+    var el=document.getElementById(id);
+    if(!el) return;
+    function down(e){ e.preventDefault(); keys[key]=1; }
+    function up(e)  { e.preventDefault(); keys[key]=0; }
+    el.addEventListener('touchstart', down, {passive:false});
+    el.addEventListener('touchend',   up,   {passive:false});
+    el.addEventListener('touchcancel',up,   {passive:false});
+    el.addEventListener('mousedown',  down);
+    el.addEventListener('mouseup',    up);
+    el.addEventListener('mouseleave', up);
+  }
+  bindBtn('btn-up',    'ArrowUp');
+  bindBtn('btn-down',  'ArrowDown');
+  bindBtn('btn-left',  'ArrowLeft');
+  bindBtn('btn-right', 'ArrowRight');
+}
+
+init();
+})();
+</script>
+</body>
+</html>
